@@ -33,6 +33,13 @@ RSI_KOUPIT = 30          # pod touto hodnotou kupujeme
 RSI_PRODAT = 70          # nad touto hodnotou prodáváme
 CASTKA_USDT = 100        # kolik USDT investujeme do jednoho obchodu
 
+# Postupné nakupování — rozdělíme částku do 3 nákupů při různých úrovních RSI
+UROVNE_NAKUPU = [
+    (30, CASTKA_USDT / 3),   # RSI < 30 → koupím třetinu
+    (25, CASTKA_USDT / 3),   # RSI < 25 → koupím další třetinu
+    (20, CASTKA_USDT / 3),   # RSI < 20 → koupím poslední třetinu
+]
+
 
 def ziskej_ceny(symbol, limit=100):
     """Stáhne posledních 'limit' zavíracích cen svíček (1 minuta)."""
@@ -94,7 +101,11 @@ def main():
     log.info(f"Symbol: {SYMBOL} | RSI koupit: <{RSI_KOUPIT} | RSI prodat: >{RSI_PRODAT}")
     print("Stiskni Ctrl+C pro ukončení\n")
 
-    nakoupeno_btc = 0.0  # kolik BTC nakoupil tento bot (ne celý účet)
+    nakoupeno_btc = 0.0       # kolik BTC nakoupil tento bot celkem
+    utraceno_usdt = 0.0       # kolik USDT jsme celkem investovali
+    splnene_urovne = set()    # které úrovně nákupu už byly použity (30, 25, 20)
+    pocet_obchodu = 0
+    celkovy_zisk = 0.0
 
     while True:
         try:
@@ -107,29 +118,46 @@ def main():
 
             log.info(
                 f"BTC: {aktualni_cena:.2f} USDT | RSI: {rsi} | "
-                f"Mám: {btc:.5f} BTC (= {btc * aktualni_cena:.2f} USDT) | "
+                f"Nakoupeno tímto botem: {nakoupeno_btc:.5f} BTC | "
                 f"Volné USDT: {usdt:.2f} | Portfolio celkem: {hodnota_portfolia:.2f} USDT"
             )
 
-            if rsi < RSI_KOUPIT and nakoupeno_btc == 0 and usdt >= CASTKA_USDT:
-                log.info(f"  → RSI={rsi} je pod {RSI_KOUPIT} → KUPUJI za {CASTKA_USDT} USDT")
-                obchod = nakup_btc(CASTKA_USDT)
-                nakoupeno_btc = float(obchod['executedQty'])
-                log.info(f"  ✓ Nákup proveden: {nakoupeno_btc:.5f} BTC")
+            # Postupné nakupování — projdeme všechny úrovně
+            for hranice_rsi, castka in UROVNE_NAKUPU:
+                if rsi < hranice_rsi and hranice_rsi not in splnene_urovne and usdt >= castka:
+                    log.info(f"  → RSI={rsi} je pod {hranice_rsi} → KUPUJI za {castka:.2f} USDT")
+                    obchod = nakup_btc(castka)
+                    nakoupene = float(obchod['executedQty'])
+                    nakoupeno_btc += nakoupene
+                    utraceno_usdt += castka
+                    splnene_urovne.add(hranice_rsi)
+                    log.info(f"  ✓ Nákup proveden: {nakoupene:.5f} BTC | Celkem nakoupeno: {nakoupeno_btc:.5f} BTC")
 
-            elif rsi > RSI_PRODAT and nakoupeno_btc > 0:
+            # Prodej — až RSI stoupne nad 70 a máme co prodávat
+            if rsi > RSI_PRODAT and nakoupeno_btc > 0:
+                trzba = nakoupeno_btc * aktualni_cena
+                zisk = trzba - utraceno_usdt
+                celkovy_zisk += zisk
+                pocet_obchodu += 1
                 log.info(f"  → RSI={rsi} je nad {RSI_PRODAT} → PRODÁVÁM {nakoupeno_btc:.5f} BTC")
                 prodej_btc(nakoupeno_btc)
+                log.info(f"  ✓ Prodej proveden | Zisk z obchodu: {zisk:+.2f} USDT")
+                log.info(f"  📊 Celkem obchodů: {pocet_obchodu} | Celkový zisk: {celkovy_zisk:+.2f} USDT")
                 nakoupeno_btc = 0.0
-                log.info(f"  ✓ Prodej proveden")
+                utraceno_usdt = 0.0
+                splnene_urovne = set()
 
+            elif nakoupeno_btc == 0 and not any(rsi < h for h, _ in UROVNE_NAKUPU):
+                log.info(f"  → Čekám na signál...")
+            elif nakoupeno_btc > 0:
+                log.info(f"  → Držím pozici, čekám na RSI > {RSI_PRODAT}")
             else:
                 log.info(f"  → Čekám na signál...")
 
             time.sleep(60)  # čekáme 1 minutu před dalším vyhodnocením
 
         except KeyboardInterrupt:
-            log.info("\nBot ukončen.")
+            log.info(f"\nBot ukončen. Celkem obchodů: {pocet_obchodu} | Celkový zisk: {celkovy_zisk:+.2f} USDT")
             break
         except Exception as e:
             log.error(f"  ✗ Chyba: {e}")
