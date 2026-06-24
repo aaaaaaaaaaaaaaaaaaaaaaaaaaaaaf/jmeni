@@ -94,7 +94,7 @@ def main():
     log.info(f"Symbol: {SYMBOL} | RSI koupit: <{RSI_KOUPIT} | RSI prodat: >{RSI_PRODAT}")
     print("Stiskni Ctrl+C pro ukončení\n")
 
-    ma_pozici = False  # bot zatím nic nekoupil
+    nakoupeno_btc = 0.0  # kolik BTC nakoupil tento bot (ne celý účet)
 
     while True:
         try:
@@ -111,16 +111,16 @@ def main():
                 f"Volné USDT: {usdt:.2f} | Portfolio celkem: {hodnota_portfolia:.2f} USDT"
             )
 
-            if rsi < RSI_KOUPIT and not ma_pozici and usdt >= CASTKA_USDT:
+            if rsi < RSI_KOUPIT and nakoupeno_btc == 0 and usdt >= CASTKA_USDT:
                 log.info(f"  → RSI={rsi} je pod {RSI_KOUPIT} → KUPUJI za {CASTKA_USDT} USDT")
-                nakup_btc(CASTKA_USDT)
-                ma_pozici = True
-                log.info(f"  ✓ Nákup proveden")
+                obchod = nakup_btc(CASTKA_USDT)
+                nakoupeno_btc = float(obchod['executedQty'])
+                log.info(f"  ✓ Nákup proveden: {nakoupeno_btc:.5f} BTC")
 
-            elif rsi > RSI_PRODAT and ma_pozici and btc > 0:
-                log.info(f"  → RSI={rsi} je nad {RSI_PRODAT} → PRODÁVÁM {btc:.5f} BTC")
-                prodej_btc(btc)
-                ma_pozici = False
+            elif rsi > RSI_PRODAT and nakoupeno_btc > 0:
+                log.info(f"  → RSI={rsi} je nad {RSI_PRODAT} → PRODÁVÁM {nakoupeno_btc:.5f} BTC")
+                prodej_btc(nakoupeno_btc)
+                nakoupeno_btc = 0.0
                 log.info(f"  ✓ Prodej proveden")
 
             else:
