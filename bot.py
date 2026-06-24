@@ -5,6 +5,19 @@ from binance.client import Client
 from dotenv import load_dotenv
 import os
 import time
+import logging
+from datetime import datetime
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.FileHandler('obchody.log', encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+log = logging.getLogger()
 
 load_dotenv()
 
@@ -77,8 +90,8 @@ def prodej_btc(mnozstvi_btc):
 
 
 def main():
-    print("=== Binance RSI Bot spuštěn ===")
-    print(f"Symbol: {SYMBOL} | RSI koupit: <{RSI_KOUPIT} | RSI prodat: >{RSI_PRODAT}")
+    log.info("=== Binance RSI Bot spuštěn ===")
+    log.info(f"Symbol: {SYMBOL} | RSI koupit: <{RSI_KOUPIT} | RSI prodat: >{RSI_PRODAT}")
     print("Stiskni Ctrl+C pro ukončení\n")
 
     ma_pozici = False  # bot zatím nic nekoupil
@@ -90,31 +103,36 @@ def main():
             aktualni_cena = ceny[-1]
             usdt = ziskej_zustatek("USDT")
             btc = ziskej_zustatek("BTC")
+            hodnota_portfolia = usdt + (btc * aktualni_cena)
 
-            print(f"Cena BTC: {aktualni_cena:.2f} USDT | RSI: {rsi} | USDT: {usdt:.2f} | BTC: {btc:.5f}")
+            log.info(
+                f"BTC: {aktualni_cena:.2f} USDT | RSI: {rsi} | "
+                f"Mám: {btc:.5f} BTC (= {btc * aktualni_cena:.2f} USDT) | "
+                f"Volné USDT: {usdt:.2f} | Portfolio celkem: {hodnota_portfolia:.2f} USDT"
+            )
 
             if rsi < RSI_KOUPIT and not ma_pozici and usdt >= CASTKA_USDT:
-                print(f"  → RSI={rsi} je pod {RSI_KOUPIT} → KUPUJI za {CASTKA_USDT} USDT")
+                log.info(f"  → RSI={rsi} je pod {RSI_KOUPIT} → KUPUJI za {CASTKA_USDT} USDT")
                 nakup_btc(CASTKA_USDT)
                 ma_pozici = True
-                print(f"  ✓ Nákup proveden")
+                log.info(f"  ✓ Nákup proveden")
 
             elif rsi > RSI_PRODAT and ma_pozici and btc > 0:
-                print(f"  → RSI={rsi} je nad {RSI_PRODAT} → PRODÁVÁM {btc:.5f} BTC")
+                log.info(f"  → RSI={rsi} je nad {RSI_PRODAT} → PRODÁVÁM {btc:.5f} BTC")
                 prodej_btc(btc)
                 ma_pozici = False
-                print(f"  ✓ Prodej proveden")
+                log.info(f"  ✓ Prodej proveden")
 
             else:
-                print(f"  → Čekám na signál...")
+                log.info(f"  → Čekám na signál...")
 
             time.sleep(60)  # čekáme 1 minutu před dalším vyhodnocením
 
         except KeyboardInterrupt:
-            print("\nBot ukončen.")
+            log.info("\nBot ukončen.")
             break
         except Exception as e:
-            print(f"  ✗ Chyba: {e}")
+            log.error(f"  ✗ Chyba: {e}")
             time.sleep(10)
 
 
