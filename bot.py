@@ -62,10 +62,18 @@ def vypocitej_ma(ceny, perioda):
     return sum(ceny[-perioda:]) / perioda
 
 
-def ziskej_ceny(symbol, limit=100):
-    """Stáhne posledních 'limit' zavíracích cen svíček (1 minuta)."""
-    svicky = klient.get_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_1MINUTE, limit=limit)
+def ziskej_ceny(symbol, interval, limit=100):
+    """Stáhne posledních 'limit' zavíracích cen svíček daného intervalu."""
+    svicky = klient.get_klines(symbol=symbol, interval=interval, limit=limit)
     return [float(s[4]) for s in svicky]  # index 4 = zavírací cena
+
+
+def trend_rostouci(symbol, interval, limit=50):
+    """Vrátí True pokud MA20 > MA50 na daném časovém rámci."""
+    ceny = ziskej_ceny(symbol, interval, limit=limit)
+    ma20 = vypocitej_ma(ceny, 20)
+    ma50 = vypocitej_ma(ceny, 50)
+    return ma20 > ma50, ma20, ma50
 
 
 def vypocitej_rsi(ceny, perioda=14):
@@ -131,26 +139,29 @@ def main():
 
     while True:
         try:
-            ceny = ziskej_ceny(SYMBOL, limit=100)
+            ceny = ziskej_ceny(SYMBOL, Client.KLINE_INTERVAL_1MINUTE, limit=100)
             rsi = vypocitej_rsi(ceny)
             ma_kratka = vypocitej_ma(ceny, MA_KRATKA)
             ma_dlouha = vypocitej_ma(ceny, MA_DLOUHA)
-            trend_nahoru = ma_kratka > ma_dlouha  # True = trend roste, False = trend klesá
+            trend_1m = ma_kratka > ma_dlouha
+            trend_1h, ma20_1h, ma50_1h = trend_rostouci(SYMBOL, Client.KLINE_INTERVAL_1HOUR)
+            trend_1d, ma20_1d, ma50_1d = trend_rostouci(SYMBOL, Client.KLINE_INTERVAL_1DAY)
+            vsechny_trendy_nahoru = trend_1m and trend_1h and trend_1d
             aktualni_cena = ceny[-1]
             usdt = ziskej_zustatek("USDT")
             btc = ziskej_zustatek("BTC")
             hodnota_portfolia = usdt + (btc * aktualni_cena)
-            trend_text = "↑ rostoucí" if trend_nahoru else "↓ klesající"
 
+            def t(trend): return "↑" if trend else "↓"
             log.info(
                 f"BTC: {aktualni_cena:.2f} USDT | RSI: {rsi} | "
-                f"Trend: {trend_text} (MA{MA_KRATKA}={ma_kratka:.0f} MA{MA_DLOUHA}={ma_dlouha:.0f}) | "
+                f"Trendy: 1m={t(trend_1m)} 1h={t(trend_1h)} 1d={t(trend_1d)} | "
                 f"Nakoupeno: {nakoupeno_btc:.5f} BTC | Volné USDT: {usdt:.2f} | Portfolio: {hodnota_portfolia:.2f} USDT"
             )
 
             # Postupné nakupování — jen pokud je trend rostoucí
             for hranice_rsi, castka in UROVNE_NAKUPU:
-                if rsi < hranice_rsi and hranice_rsi not in splnene_urovne and usdt >= castka and trend_nahoru:
+                if rsi < hranice_rsi and hranice_rsi not in splnene_urovne and usdt >= castka and vsechny_trendy_nahoru:
                     poplatky = poplatky_za_obchod(castka)
                     # RSI pod 25 = očekáváme alespoň 0.5% zisk, pod 30 = alespoň 0.3%
                     ocekavany_zisk_procent = 0.5 if hranice_rsi <= 25 else 0.3
@@ -203,8 +214,12 @@ def main():
 
             elif nakoupeno_btc > 0:
                 log.info(f"  → Držím pozici, čekám na RSI > {RSI_PRODAT}")
-            elif not trend_nahoru:
-                log.info(f"  → Trend klesající — nekupuji ani při nízkém RSI")
+            elif not vsechny_trendy_nahoru:
+                duvod = []
+                if not trend_1m: duvod.append("1m ↓")
+                if not trend_1h: duvod.append("1h ↓")
+                if not trend_1d: duvod.append("1d ↓")
+                log.info(f"  → Nekupuji — klesající trend: {', '.join(duvod)}")
             else:
                 log.info(f"  → Čekám na signál...")
 
