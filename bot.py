@@ -32,6 +32,7 @@ RSI_PERIODA = 14         # standardní nastavení RSI
 RSI_KOUPIT = 30          # pod touto hodnotou kupujeme
 RSI_PRODAT = 70          # nad touto hodnotou prodáváme
 CASTKA_USDT = 100        # kolik USDT investujeme do jednoho obchodu
+STOP_LOSS_PROCENT = 2.0  # prodej pokud cena klesne o více než 2% pod průměrnou nákupní cenu
 
 # Postupné nakupování — rozdělíme částku do 3 nákupů při různých úrovních RSI
 UROVNE_NAKUPU = [
@@ -103,6 +104,7 @@ def main():
 
     nakoupeno_btc = 0.0       # kolik BTC nakoupil tento bot celkem
     utraceno_usdt = 0.0       # kolik USDT jsme celkem investovali
+    prumerna_nakupni_cena = 0.0  # průměrná cena za kterou jsme nakoupili
     splnene_urovne = set()    # které úrovně nákupu už byly použity (30, 25, 20)
     pocet_obchodu = 0
     celkovy_zisk = 0.0
@@ -130,8 +132,26 @@ def main():
                     nakoupene = float(obchod['executedQty'])
                     nakoupeno_btc += nakoupene
                     utraceno_usdt += castka
+                    prumerna_nakupni_cena = utraceno_usdt / nakoupeno_btc
                     splnene_urovne.add(hranice_rsi)
-                    log.info(f"  ✓ Nákup proveden: {nakoupene:.5f} BTC | Celkem nakoupeno: {nakoupeno_btc:.5f} BTC")
+                    stop_loss_cena = prumerna_nakupni_cena * (1 - STOP_LOSS_PROCENT / 100)
+                    log.info(f"  ✓ Nákup proveden: {nakoupene:.5f} BTC | Celkem nakoupeno: {nakoupeno_btc:.5f} BTC | Stop-loss: {stop_loss_cena:.2f} USDT")
+
+            # Stop-loss — prodej pokud cena klesla příliš
+            if nakoupeno_btc > 0 and prumerna_nakupni_cena > 0:
+                stop_loss_cena = prumerna_nakupni_cena * (1 - STOP_LOSS_PROCENT / 100)
+                if aktualni_cena < stop_loss_cena:
+                    zisk = (nakoupeno_btc * aktualni_cena) - utraceno_usdt
+                    celkovy_zisk += zisk
+                    pocet_obchodu += 1
+                    log.info(f"  ⚠ STOP-LOSS: cena {aktualni_cena:.2f} klesla pod {stop_loss_cena:.2f} → PRODÁVÁM {nakoupeno_btc:.5f} BTC")
+                    prodej_btc(nakoupeno_btc)
+                    log.info(f"  ✓ Stop-loss prodej proveden | Ztráta: {zisk:+.2f} USDT")
+                    log.info(f"  📊 Celkem obchodů: {pocet_obchodu} | Celkový zisk: {celkovy_zisk:+.2f} USDT")
+                    nakoupeno_btc = 0.0
+                    utraceno_usdt = 0.0
+                    prumerna_nakupni_cena = 0.0
+                    splnene_urovne = set()
 
             # Prodej — až RSI stoupne nad 70 a máme co prodávat
             if rsi > RSI_PRODAT and nakoupeno_btc > 0:
@@ -145,6 +165,7 @@ def main():
                 log.info(f"  📊 Celkem obchodů: {pocet_obchodu} | Celkový zisk: {celkovy_zisk:+.2f} USDT")
                 nakoupeno_btc = 0.0
                 utraceno_usdt = 0.0
+                prumerna_nakupni_cena = 0.0
                 splnene_urovne = set()
 
             elif nakoupeno_btc == 0 and not any(rsi < h for h, _ in UROVNE_NAKUPU):
