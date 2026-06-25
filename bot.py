@@ -35,6 +35,7 @@ CASTKA_USDT = 100        # kolik USDT investujeme do jednoho obchodu
 STOP_LOSS_PROCENT = 2.0  # prodej pokud cena klesne o více než 2% pod průměrnou nákupní cenu
 MA_KRATKA = 20           # rychlý klouzavý průměr (posledních 20 svíček)
 MA_DLOUHA = 50           # pomalý klouzavý průměr (posledních 50 svíček)
+POPLATEK_PROCENT = 0.1   # Binance poplatek za obchod (0.1% z hodnoty)
 
 # Postupné nakupování — rozdělíme částku do 3 nákupů při různých úrovních RSI
 UROVNE_NAKUPU = [
@@ -42,6 +43,18 @@ UROVNE_NAKUPU = [
     (25, CASTKA_USDT / 3),   # RSI < 25 → koupím další třetinu
     (20, CASTKA_USDT / 3),   # RSI < 20 → koupím poslední třetinu
 ]
+
+
+def poplatky_za_obchod(castka_usdt):
+    """Vrátí celkové poplatky za nákup + prodej dané částky."""
+    return castka_usdt * (POPLATEK_PROCENT / 100) * 2  # nákup + prodej
+
+
+def ma_smysl_obchodovat(castka_usdt, ocekavany_zisk_procent):
+    """Vrátí True pokud očekávaný zisk pokryje poplatky."""
+    poplatky = poplatky_za_obchod(castka_usdt)
+    ocekavany_zisk = castka_usdt * (ocekavany_zisk_procent / 100)
+    return ocekavany_zisk > poplatky
 
 
 def vypocitej_ma(ceny, perioda):
@@ -138,11 +151,17 @@ def main():
             # Postupné nakupování — jen pokud je trend rostoucí
             for hranice_rsi, castka in UROVNE_NAKUPU:
                 if rsi < hranice_rsi and hranice_rsi not in splnene_urovne and usdt >= castka and trend_nahoru:
-                    log.info(f"  → RSI={rsi} je pod {hranice_rsi} → KUPUJI za {castka:.2f} USDT")
+                    poplatky = poplatky_za_obchod(castka)
+                    # RSI pod 25 = očekáváme alespoň 0.5% zisk, pod 30 = alespoň 0.3%
+                    ocekavany_zisk_procent = 0.5 if hranice_rsi <= 25 else 0.3
+                    if not ma_smysl_obchodovat(castka, ocekavany_zisk_procent):
+                        log.info(f"  → Přeskakuji — poplatky ({poplatky:.3f} USDT) by převýšily očekávaný zisk")
+                        continue
+                    log.info(f"  → RSI={rsi} je pod {hranice_rsi} → KUPUJI za {castka:.2f} USDT (poplatky: {poplatky:.3f} USDT)")
                     obchod = nakup_btc(castka)
                     nakoupene = float(obchod['executedQty'])
                     nakoupeno_btc += nakoupene
-                    utraceno_usdt += castka
+                    utraceno_usdt += castka + (castka * POPLATEK_PROCENT / 100)  # včetně poplatku za nákup
                     prumerna_nakupni_cena = utraceno_usdt / nakoupeno_btc
                     splnene_urovne.add(hranice_rsi)
                     stop_loss_cena = prumerna_nakupni_cena * (1 - STOP_LOSS_PROCENT / 100)
@@ -152,7 +171,9 @@ def main():
             if nakoupeno_btc > 0 and prumerna_nakupni_cena > 0:
                 stop_loss_cena = prumerna_nakupni_cena * (1 - STOP_LOSS_PROCENT / 100)
                 if aktualni_cena < stop_loss_cena:
-                    zisk = (nakoupeno_btc * aktualni_cena) - utraceno_usdt
+                    trzba_sl = nakoupeno_btc * aktualni_cena
+                    poplatek_sl = trzba_sl * POPLATEK_PROCENT / 100
+                    zisk = trzba_sl - poplatek_sl - utraceno_usdt
                     celkovy_zisk += zisk
                     pocet_obchodu += 1
                     log.info(f"  ⚠ STOP-LOSS: cena {aktualni_cena:.2f} klesla pod {stop_loss_cena:.2f} → PRODÁVÁM {nakoupeno_btc:.5f} BTC")
@@ -167,13 +188,14 @@ def main():
             # Prodej — až RSI stoupne nad 70 a máme co prodávat
             if rsi > RSI_PRODAT and nakoupeno_btc > 0:
                 trzba = nakoupeno_btc * aktualni_cena
-                zisk = trzba - utraceno_usdt
+                poplatek_prodej = trzba * POPLATEK_PROCENT / 100
+                zisk = trzba - poplatek_prodej - utraceno_usdt  # utraceno_usdt už obsahuje poplatek za nákup
                 celkovy_zisk += zisk
                 pocet_obchodu += 1
                 log.info(f"  → RSI={rsi} je nad {RSI_PRODAT} → PRODÁVÁM {nakoupeno_btc:.5f} BTC")
                 prodej_btc(nakoupeno_btc)
-                log.info(f"  ✓ Prodej proveden | Zisk z obchodu: {zisk:+.2f} USDT")
-                log.info(f"  📊 Celkem obchodů: {pocet_obchodu} | Celkový zisk: {celkovy_zisk:+.2f} USDT")
+                log.info(f"  ✓ Prodej proveden | Zisk po poplatcích: {zisk:+.2f} USDT")
+                log.info(f"  📊 Celkem obchodů: {pocet_obchodu} | Celkový zisk po poplatcích: {celkovy_zisk:+.2f} USDT")
                 nakoupeno_btc = 0.0
                 utraceno_usdt = 0.0
                 prumerna_nakupni_cena = 0.0
