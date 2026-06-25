@@ -33,6 +33,8 @@ RSI_KOUPIT = 30          # pod touto hodnotou kupujeme
 RSI_PRODAT = 70          # nad touto hodnotou prodáváme
 CASTKA_USDT = 100        # kolik USDT investujeme do jednoho obchodu
 STOP_LOSS_PROCENT = 2.0  # prodej pokud cena klesne o více než 2% pod průměrnou nákupní cenu
+MA_KRATKA = 20           # rychlý klouzavý průměr (posledních 20 svíček)
+MA_DLOUHA = 50           # pomalý klouzavý průměr (posledních 50 svíček)
 
 # Postupné nakupování — rozdělíme částku do 3 nákupů při různých úrovních RSI
 UROVNE_NAKUPU = [
@@ -40,6 +42,11 @@ UROVNE_NAKUPU = [
     (25, CASTKA_USDT / 3),   # RSI < 25 → koupím další třetinu
     (20, CASTKA_USDT / 3),   # RSI < 20 → koupím poslední třetinu
 ]
+
+
+def vypocitej_ma(ceny, perioda):
+    """Vypočítá klouzavý průměr z posledních 'perioda' cen."""
+    return sum(ceny[-perioda:]) / perioda
 
 
 def ziskej_ceny(symbol, limit=100):
@@ -111,22 +118,26 @@ def main():
 
     while True:
         try:
-            ceny = ziskej_ceny(SYMBOL)
+            ceny = ziskej_ceny(SYMBOL, limit=100)
             rsi = vypocitej_rsi(ceny)
+            ma_kratka = vypocitej_ma(ceny, MA_KRATKA)
+            ma_dlouha = vypocitej_ma(ceny, MA_DLOUHA)
+            trend_nahoru = ma_kratka > ma_dlouha  # True = trend roste, False = trend klesá
             aktualni_cena = ceny[-1]
             usdt = ziskej_zustatek("USDT")
             btc = ziskej_zustatek("BTC")
             hodnota_portfolia = usdt + (btc * aktualni_cena)
+            trend_text = "↑ rostoucí" if trend_nahoru else "↓ klesající"
 
             log.info(
                 f"BTC: {aktualni_cena:.2f} USDT | RSI: {rsi} | "
-                f"Nakoupeno tímto botem: {nakoupeno_btc:.5f} BTC | "
-                f"Volné USDT: {usdt:.2f} | Portfolio celkem: {hodnota_portfolia:.2f} USDT"
+                f"Trend: {trend_text} (MA{MA_KRATKA}={ma_kratka:.0f} MA{MA_DLOUHA}={ma_dlouha:.0f}) | "
+                f"Nakoupeno: {nakoupeno_btc:.5f} BTC | Volné USDT: {usdt:.2f} | Portfolio: {hodnota_portfolia:.2f} USDT"
             )
 
-            # Postupné nakupování — projdeme všechny úrovně
+            # Postupné nakupování — jen pokud je trend rostoucí
             for hranice_rsi, castka in UROVNE_NAKUPU:
-                if rsi < hranice_rsi and hranice_rsi not in splnene_urovne and usdt >= castka:
+                if rsi < hranice_rsi and hranice_rsi not in splnene_urovne and usdt >= castka and trend_nahoru:
                     log.info(f"  → RSI={rsi} je pod {hranice_rsi} → KUPUJI za {castka:.2f} USDT")
                     obchod = nakup_btc(castka)
                     nakoupene = float(obchod['executedQty'])
@@ -168,10 +179,10 @@ def main():
                 prumerna_nakupni_cena = 0.0
                 splnene_urovne = set()
 
-            elif nakoupeno_btc == 0 and not any(rsi < h for h, _ in UROVNE_NAKUPU):
-                log.info(f"  → Čekám na signál...")
             elif nakoupeno_btc > 0:
                 log.info(f"  → Držím pozici, čekám na RSI > {RSI_PRODAT}")
+            elif not trend_nahoru:
+                log.info(f"  → Trend klesající — nekupuji ani při nízkém RSI")
             else:
                 log.info(f"  → Čekám na signál...")
 
